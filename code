@@ -1,0 +1,166 @@
+library(crs)
+
+# Load the data.
+smallangle <- read.csv("SmallAngleLabel.csv" , header=TRUE)
+fullangle <- read.csv("FullAngleLabel.csv" , header=TRUE)
+
+mydata <- merge(smallangle,fullangle,by="userID")
+mydata$userID <- NULL
+mydata$Text.y <- NULL
+mydata$A5 <- NULL
+
+
+# The following variable selections have been noted.
+
+input <- c( "A6", "A7", "A8", "A9",
+            "A10", "A11", "A12", "A13",
+            "A14", "A15", "A16", "A17",
+            "A18", "A19", "A20", "A21",
+            "A22", "A23", "A24", "A25",
+            "A26", "A27", "A28",
+            "H19", "H20", "H21", "H22",
+            "H23", "H24", "H25", "H26",
+            "H27", "H28", "H29", "H30",
+            "H31", "H32", "H33", "H34",
+            "H35", "H36", "H37", "H38",
+            "H39", "H40", "H41", "H42",
+            "H43", "H44", "H45", "H46",
+            "H47", "H48", "H49", "H50",
+            "H51", "H52", "H53", "H54",
+            "H55", "H56", "H57", "H58",
+            "H59", "H60", "H61", "H62",
+            "H63", "H64", "H65", "H66",
+            "H67", "H68", "H69", "H70",
+            "H71", "H72", "H73", "H74",
+            "H75", "H76", "H77", "H78",
+            "H79", "H80", "H81", "H82",
+            "H83", "H84", "H85", "H86",
+            "H87", "H88", "H89", "H90",
+            "H91", "H92", "H93")
+
+colnames(mydata) <- c("Label",input)
+
+target  <- "Label"
+mydata$Label<-as.factor(as.character(mydata$Label))
+
+# Build the training/validate/test datasets.
+set.seed(422) 
+nobs <- nrow(mydata) # 391 observations 
+
+train_idx <- sample(nobs, 0.8*nobs) # 312 observations
+train_data <- mydata[train_idx,]
+train_data_Label_dropped <-train_data[,-1]
+train_data_Label_only <-train_data[1]
+mydata1 <- merge(train_data_Label_dropped,train_data_Label_only)
+validate_idx <- sample(setdiff(seq_len(nobs), train_idx), 0.2*nobs) # 78 observations
+validate_data <- mydata[validate_idx,]
+validate_data_Label_dropped <-validate_data[,-1]
+validate_data_Label_only <-validate_data[1]
+
+
+# Build the training/validate/test datasets.
+
+# Support vector machine. 
+
+# The 'kernlab' package provides the 'ksvm' function.
+
+library(kernlab, quietly=TRUE)
+
+# Build a Support Vector Machine model.
+
+set.seed(422)
+ksvm_model <- ksvm(as.factor(Label) ~ .,
+                 data=mydata[train_idx,c(input, target)],
+                 kernel="rbfdot",
+                 prob.model=TRUE)
+# Evaluate model performance. 
+
+# Generate an Error Matrix for the SVM model.
+
+# Obtain the response from the SVM model.
+
+performance <- kernlab::predict(ksvm_model, newdata=na.omit(mydata[validate_idx, c(input, target)]))
+
+# Generate the confusion matrix showing counts.
+
+table(na.omit(mydata[validate_idx, c(input, target)])$Label, performance,
+      useNA="ifany",
+      dnn=c("Actual", "Predicted"))
+
+# Generate the confusion matrix showing proportions.
+
+pcme <- function(actual, cl)
+{
+  x <- table(actual, cl)
+  nc <- nrow(x) # Number of classes.
+  nv <- length(actual) - sum(is.na(actual) | is.na(cl)) # Number of values.
+  tbl <- cbind(x/nv,
+               Error=sapply(1:nc,
+                            function(r) round(sum(x[r,-r])/sum(x[r,]), 2)))
+  names(attr(tbl, "dimnames")) <- c("Actual", "Predicted")
+  return(tbl)
+}
+per <- pcme(na.omit(mydata[validate_idx, c(input, target)])$Label, performance)
+round(per, 2)
+
+# Calculate the overall error percentage.
+
+cat(100*round(1-sum(diag(per), na.rm=TRUE), 2))
+
+# Calculate the averaged class error percentage.
+
+cat(100*round(mean(per[,"Error"], na.rm=TRUE), 2))
+library(gbm)
+
+boost.gbm <- gbm(Label ~ ., data = train_data, distribution = "multinomial") 
+z<-predict.gbm(boost.gbm,newdata=validate_data[-1],n.trees=400,type="link",single.tree=FALSE)
+gbm.perf(boost.gbm,
+         plot.it = TRUE,
+         oobag.curve = TRUE,
+         overlay = TRUE,
+         method="OOB")
+boost.gbm$train.error[100]
+boost.gbm$oobag.improve
+boost.gbm$train.error[100]
+boost.gbm$valid.error
+boost.gbm$cv.folds
+
+library(gglasso)
+train_data_Label_dropped<-as.matrix(train_data_Label_dropped)
+train_data_Label_only<-as.matrix(as.numeric(train_data_Label_only))
+
+
+cv <- cv.gglasso(x=train_data_Label_dropped, y=train_data_Label_only, group=group, loss="sqsvm",
+                 pred.loss="misclass", lambda.factor=0.05, nfolds=5)
+
+
+
+set.seed(1)
+tune.out=tune(ksvm_model, as.factor(Label)~ ., data=mydata[train_idx,c(input, target)],
+              kernel="rbfdot", ranges=list(gamma=c(0.1, 0.5, 1,2,4)), cost=c(0.1, 1, 10, 100, 1000))
+summary(tune.out)
+
+library(rpart)
+library(wSVM)
+
+X<-train_data_Label_dropped
+
+X<-as.matrix(as.numeric(X))
+Y<-as.factor(as.character(train_data_Label_only$Label))
+Y<-as.factor(as.character(Y))
+Y<-as.matrix(Y)
+new.X<-validate_data_Label_dropped
+new.Y<-as.factor(as.character(new.Y))
+# run Weighted K-means clustering SVM with boosting algorithm
+model <- wsvm(X, Y, c.n = rep(1/ length(Y),length(Y)))
+# predict the model and compute an error rate.
+pred <- wsvm.predict(X,Y, new.X, new.Y, model)
+new.Y <- as.vector(new.Y[1,])
+
+Error.rate(pred$predicted.values,new.Y)
+
+
+
+                 
+
+
